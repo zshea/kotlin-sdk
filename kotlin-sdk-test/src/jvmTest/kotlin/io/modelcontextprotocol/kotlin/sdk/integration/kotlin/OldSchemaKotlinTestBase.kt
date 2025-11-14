@@ -11,11 +11,13 @@ import io.modelcontextprotocol.kotlin.sdk.Implementation
 import io.modelcontextprotocol.kotlin.sdk.client.Client
 import io.modelcontextprotocol.kotlin.sdk.client.SseClientTransport
 import io.modelcontextprotocol.kotlin.sdk.client.StdioClientTransport
+import io.modelcontextprotocol.kotlin.sdk.client.StreamableHttpClientTransport
 import io.modelcontextprotocol.kotlin.sdk.integration.utils.Retry
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
 import io.modelcontextprotocol.kotlin.sdk.server.StdioServerTransport
 import io.modelcontextprotocol.kotlin.sdk.server.mcp
+import io.modelcontextprotocol.kotlin.sdk.server.mcpStatelessStreamableHttp
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.io.Sink
@@ -43,7 +45,7 @@ abstract class OldSchemaKotlinTestBase {
     protected lateinit var serverEngine: EmbeddedServer<*, *>
 
     // Transport selection
-    protected enum class TransportKind { SSE, STDIO }
+    protected enum class TransportKind { SSE, STDIO, STREAMABLE_HTTP_STATELESS }
     protected open val transportKind: TransportKind = TransportKind.STDIO
 
     // STDIO-specific fields
@@ -57,7 +59,7 @@ abstract class OldSchemaKotlinTestBase {
     @BeforeEach
     fun setUp() {
         setupServer()
-        if (transportKind == TransportKind.SSE) {
+        if (transportKind == TransportKind.SSE || transportKind == TransportKind.STREAMABLE_HTTP_STATELESS) {
             await
                 .ignoreExceptions()
                 .until {
@@ -78,6 +80,18 @@ abstract class OldSchemaKotlinTestBase {
                         install(SSE)
                     },
                     "http://$host:$port",
+                )
+                client = Client(
+                    Implementation("test", "1.0"),
+                )
+                client.connect(transport)
+            }
+            TransportKind.STREAMABLE_HTTP_STATELESS -> {
+                val transport = StreamableHttpClientTransport(
+                    HttpClient(CIO) {
+                        install(SSE)
+                    },
+                    "http://$host:$port/mcp",
                 )
                 client = Client(
                     Implementation("test", "1.0"),
@@ -110,35 +124,46 @@ abstract class OldSchemaKotlinTestBase {
 
         configureServer()
 
-        if (transportKind == TransportKind.SSE) {
-            serverEngine = embeddedServer(ServerCIO, host = host, port = port) {
-                install(ServerSSE)
-                routing {
-                    mcp { server }
+        when (transportKind) {
+            TransportKind.SSE -> {
+                serverEngine = embeddedServer(ServerCIO, host = host, port = port) {
+                    install(ServerSSE)
+                    routing {
+                        mcp { server }
+                    }
+                }.start(wait = false)
+            }
+            TransportKind.STREAMABLE_HTTP_STATELESS -> {
+                serverEngine = embeddedServer(ServerCIO, host = host, port = port) {
+                    install(ServerSSE)
+                    routing {
+                        mcpStatelessStreamableHttp { server }
+                    }
+                }.start(wait = false)
+            }
+            TransportKind.STDIO -> {
+                // Create in-memory stdio pipes: client->server and server->client
+                val clientToServerOut = PipedOutputStream()
+                val clientToServerIn = PipedInputStream(clientToServerOut)
+
+                val serverToClientOut = PipedOutputStream()
+                val serverToClientIn = PipedInputStream(serverToClientOut)
+
+                // Server transport reads from client and writes to client
+                val serverTransport = StdioServerTransport(
+                    inputStream = clientToServerIn.asSource().buffered(),
+                    outputStream = serverToClientOut.asSink().buffered(),
+                )
+                stdioServerTransport = serverTransport
+
+                // Prepare client-side streams for later client initialization
+                stdioClientInput = serverToClientIn.asSource().buffered()
+                stdioClientOutput = clientToServerOut.asSink().buffered()
+
+                // Start server transport by connecting the server
+                runBlocking {
+                    server.createSession(serverTransport)
                 }
-            }.start(wait = false)
-        } else {
-            // Create in-memory stdio pipes: client->server and server->client
-            val clientToServerOut = PipedOutputStream()
-            val clientToServerIn = PipedInputStream(clientToServerOut)
-
-            val serverToClientOut = PipedOutputStream()
-            val serverToClientIn = PipedInputStream(serverToClientOut)
-
-            // Server transport reads from client and writes to client
-            val serverTransport = StdioServerTransport(
-                inputStream = clientToServerIn.asSource().buffered(),
-                outputStream = serverToClientOut.asSink().buffered(),
-            )
-            stdioServerTransport = serverTransport
-
-            // Prepare client-side streams for later client initialization
-            stdioClientInput = serverToClientIn.asSource().buffered()
-            stdioClientOutput = clientToServerOut.asSink().buffered()
-
-            // Start server transport by connecting the server
-            runBlocking {
-                server.createSession(serverTransport)
             }
         }
     }
@@ -159,24 +184,27 @@ abstract class OldSchemaKotlinTestBase {
         }
 
         // stop server
-        if (transportKind == TransportKind.SSE) {
-            if (::serverEngine.isInitialized) {
-                try {
-                    serverEngine.stop(500, 1000)
-                } catch (e: Exception) {
-                    println("Warning: Error during server stop: ${e.message}")
+        when (transportKind) {
+            TransportKind.SSE, TransportKind.STREAMABLE_HTTP_STATELESS -> {
+                if (::serverEngine.isInitialized) {
+                    try {
+                        serverEngine.stop(500, 1000)
+                    } catch (e: Exception) {
+                        println("Warning: Error during server stop: ${e.message}")
+                    }
                 }
             }
-        } else {
-            stdioServerTransport?.let {
-                try {
-                    runBlocking { it.close() }
-                } catch (e: Exception) {
-                    println("Warning: Error during stdio server stop: ${e.message}")
-                } finally {
-                    stdioServerTransport = null
-                    stdioClientInput = null
-                    stdioClientOutput = null
+            TransportKind.STDIO -> {
+                stdioServerTransport?.let {
+                    try {
+                        runBlocking { it.close() }
+                    } catch (e: Exception) {
+                        println("Warning: Error during stdio server stop: ${e.message}")
+                    } finally {
+                        stdioServerTransport = null
+                        stdioClientInput = null
+                        stdioClientOutput = null
+                    }
                 }
             }
         }

@@ -47,6 +47,7 @@ abstract class KotlinTestBase {
 
     // Transport selection
     protected enum class TransportKind { SSE, STDIO, STREAMABLE_HTTP_STATELESS }
+
     protected open val transportKind: TransportKind = TransportKind.STDIO
 
     // STDIO-specific fields
@@ -60,7 +61,7 @@ abstract class KotlinTestBase {
     @BeforeEach
     fun setUp() {
         setupServer()
-        if (transportKind == TransportKind.SSE) {
+        if (transportKind == TransportKind.SSE || transportKind == TransportKind.STREAMABLE_HTTP_STATELESS) {
             await
                 .ignoreExceptions()
                 .until {
@@ -87,6 +88,7 @@ abstract class KotlinTestBase {
                 )
                 client.connect(transport)
             }
+
             TransportKind.STREAMABLE_HTTP_STATELESS -> {
                 val transport = StreamableHttpClientTransport(
                     HttpClient(CIO) {
@@ -99,6 +101,7 @@ abstract class KotlinTestBase {
                 )
                 client.connect(transport)
             }
+
             TransportKind.STDIO -> {
                 val input = checkNotNull(stdioClientInput) { "STDIO client input not initialized" }
                 val output = checkNotNull(stdioClientOutput) { "STDIO client output not initialized" }
@@ -138,10 +141,11 @@ abstract class KotlinTestBase {
                 serverEngine = embeddedServer(ServerCIO, host = host, port = port) {
                     install(ServerSSE)
                     routing {
-                        mcpStatelessStreamableHttp { server }
+                            mcpStatelessStreamableHttp { server }
                     }
                 }.start(wait = false)
             }
+
             TransportKind.STDIO -> {
                 // Create in-memory stdio pipes: client->server and server->client
                 val clientToServerOut = PipedOutputStream()

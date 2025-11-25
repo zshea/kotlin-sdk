@@ -210,12 +210,11 @@ public class StreamableHttpServerTransport(
                 activeStream.call.response.header(HttpHeaders.ContentType, ContentType.Application.Json.toString())
                 sessionId?.let { activeStream.call.response.header(MCP_SESSION_ID_HEADER, it) }
                 val responses = relatedIds.mapNotNull { requestToResponseMapping[it] }
-                val payload = if (responses.size == 1) {
-                    responses.first()
+                if (responses.size == 1) {
+                    activeStream.call.respond(responses.first())
                 } else {
-                    responses
+                    activeStream.call.respond(responses)
                 }
-                activeStream.call.respond(payload)
             } else {
                 activeStream.session?.close()
             }

@@ -14,6 +14,8 @@ kotlin {
                 api(libs.ktor.server.sse)
                 implementation(libs.ktor.server.websockets)
                 implementation(libs.kotlin.logging)
+                implementation(libs.ktor.server.content.negotiation)
+                implementation(libs.ktor.serialization.kotlinx.json)
             }
         }
 

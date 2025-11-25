@@ -2,12 +2,15 @@ package io.modelcontextprotocol.kotlin.sdk.server
 
 import io.github.oshai.kotlinlogging.KotlinLogging
 import io.ktor.http.HttpStatusCode
+import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
 import io.ktor.server.application.install
+import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.request.header
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Routing
 import io.ktor.server.routing.RoutingContext
+import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
@@ -16,6 +19,7 @@ import io.ktor.server.sse.ServerSSESession
 import io.ktor.server.sse.sse
 import io.ktor.utils.io.KtorDsl
 import io.modelcontextprotocol.kotlin.sdk.shared.AbstractTransport
+import io.modelcontextprotocol.kotlin.sdk.types.McpJson
 import io.modelcontextprotocol.kotlin.sdk.types.RPCError
 import kotlinx.atomicfu.AtomicRef
 import kotlinx.atomicfu.atomic
@@ -114,7 +118,14 @@ public fun Application.mcpStatelessStreamableHttp(
     eventStore: EventStore? = null,
     block: RoutingContext.() -> Server,
 ) {
+
+    install(ContentNegotiation) {
+        json(McpJson)
+    }
     routing {
+        get("/mcp") {
+            call.respond(HttpStatusCode.MethodNotAllowed)
+        }
         post("/mcp") {
             mcpStatelessStreamableHttpEndpoint(
                 enableDnsRebindingProtection,
